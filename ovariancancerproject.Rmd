@@ -1,0 +1,880 @@
+---
+
+NOTE: Mehrun did the coding for the process (supervised, unsupervised, logistic) and Le Wei did the visualization. The visualization code is in the last section and majority is not embedded throughout the code.
+
+
+Importing Data
+
+```{r}
+#Download the dataset from https://www.kaggle.com/datasets/saurabhshahane/predict-ovarian-cancer/data
+
+library(readxl)
+ovdata <- read_excel("Supplementary data 1.xlsx")
+ovdata
+ovdata=data.frame(ovdata)
+ovdata
+#imported main data that will be used for data and biomarker exploration
+```
+
+Cleaning Data
+```{r}
+
+#check the data
+ovdata
+
+#then we will remove any irrelevant columns, CA72-4 and Subject ID
+#view all column names
+colnames(ovdata)
+#CA72.4 has lots of NAs, so we will remove this column first, its the 15th
+ovdata = ovdata[,-15]
+#checking that it is gone
+ovdata
+
+#now removing subject ID
+ovdata = ovdata[,-1]
+colnames(ovdata)
+#first we will clean the main data, we will remove NAs.
+ovdata = na.omit(ovdata)
+dim(ovdata)
+#we have 216 datapoints and 49 columns
+
+#then we will check the strings to change anything from character to numeric values
+str(ovdata)
+#characters need to be changed to numeric: AFP, CA125, CA19.9
+ovdata$AFP = as.numeric(ovdata$AFP)
+ovdata$CA125 = as.numeric(ovdata$CA125)
+ovdata$CA19.9 = as.numeric(ovdata$CA19.9)
+```
+
+Making Respective Datasets
+```{r}
+#we will remove categorical columns to create a dataset for PCA
+colnames(ovdata) #TYPE is 18th, once we remeove that, then Menopause will be 33rd.
+numov = ovdata[,-18]
+numov = numov[,-33]
+colnames(numov) #Confirming categorical variables are gone
+
+#now we will create a scaled dataset to compare with the random forest logistic regression at the end, we will first remove the categorical
+#datasets and then scale, then add them back in. 
+
+TYPE = ovdata$TYPE
+Menopause = ovdata$Menopause
+colnames(ovdata) #remove 18 then 33
+scaleov = ovdata[,-18]
+scaleov = scaleov[,-33]
+scaleov = scale(scaleov, center=TRUE, scale=TRUE)
+scaleov = data.frame(scaleov)
+scaleov$TYPE = TYPE
+scaleov$Menopause = Menopause
+scaleov
+scaleov2 = scaleov #making a copy where Menopause and TYPE can be factors for random forest
+scaleov2$Menopause = as.factor(scaleov2$Menopause)
+scaleov2$TYPE = as.factor(scaleov2$TYPE)
+
+#Creation of Dataset for logistic regression, with 0's and 1's for the categorical variables
+logdata = ovdata
+
+```
+Further Adjustment of Categorical Data in ovdata
+```{r}
+#the purpose is to set the categorical variables to yes, no, cancer, benign tumor, which makes it easier
+#to interpret
+ovdata[ovdata$Menopause == 0,]$Menopause = "N"
+ovdata[ovdata$Menopause == 1,]$Menopause = "Y"
+ovdata$Menopause = as.factor(ovdata$Menopause)
+ovdata$Menopause
+
+ovdata[ovdata$TYPE == 0,]$TYPE = "OC"
+ovdata[ovdata$TYPE == 1,]$TYPE = "BOT"
+ovdata$TYPE = as.factor(ovdata$TYPE)
+
+```
+
+Creation of Training and Test Sets
+```{r}
+#216 datsets, 70 percent training and 30 percent testing. 150 = 70%, 66 for 30%
+set.seed(123)
+training <- sample(1:216, 150, replace = FALSE)
+testing <- setdiff(1:216,training)
+
+#ovtrain and test will be used for randomforest
+ovtrain = ovdata[training,]
+ovtest = ovdata[testing,]
+
+#logtrain and test will be used for logistic regression
+logtrain = logdata[training,]
+logtest = logdata[testing,]
+
+#scaled data will also be used to test logistic regression
+scaletrain = scaleov[training,]
+scaletest = scaleov[testing,]
+
+#scaled data for random forest
+scaletrain2 = scaleov2[training,]
+scaletest2 = scaleov2[testing,]
+```
+
+Performing analysis of relevant biomarkers (Random Forest)
+```{r}
+
+library(randomForest)
+#nonscaled version
+
+rmov = ovdata[,-18]#remove TYPE, because it will show a maximum score in the varImpPlot
+set.seed(123)
+RFM = randomForest(rmov, ovdata$TYPE, ntree = 1000, importance=TRUE, proximity=TRUE)
+RFM  
+
+#lets view the top fifteen variables
+varImpPlot(RFM,
+ n.var = 15,
+ pch=19,
+ main=NULL,
+ col="red",
+ gcolor="blue",
+ lcolor="darkgreen")
+
+```
+
+List of top 15 variables
+```{r}
+RFM$importance
+RFMimp = RFM$importance[,"MeanDecreaseAccuracy"]
+RFMimp = as.matrix(RFMimp)
+RFMimp=RFMimp[order(RFMimp[,1]),,drop=FALSE]
+RFMimp 
+
+#there is some discrepancy with the plot versus the column recording MeanDecrease Accuracy. The plot includes GLO as the last value while the contains PCT as the last value. In addition, the orders of the values are different. 
+
+#We will follow the plot instead
+#there are 48 values total and we need the last three, so range 34 to 48 is needed
+rfmlist15 = c("HE4", "CA125", "Age", "LYM.", "NEU", "Menopause", "LYM..1", "AST", "PDW", "ALP", "Mg", "CEA", "CO2CP", "MPV", "GLO")
+
+```
+Testing the performance of Random Forest with Training and Test Set
+```{r}
+set.seed(789)
+RFMtrain = randomForest(ovtrain$TYPE~., data=ovtrain)
+ovpred = predict(RFMtrain, ovtest)
+
+#confusion matrix
+table(ovpred, ovtest$TYPE) #misclassification rate of 13/66 = 19.7%
+```
+
+
+Scaled Version
+```{r}
+colnames(scaleov2)
+rmovscale = scaleov2[,-48] #remove the TYPE like last time
+set.seed(123)
+RFMscale = randomForest(rmovscale, scaleov2$TYPE, ntree = 1000, importance=TRUE, proximity=TRUE)
+RFMscale
+
+#lets view the top fifteen variables
+varImpPlot(RFMscale,
+ n.var = 15,
+ pch=19,
+ main=NULL,
+ col="red",
+ gcolor="blue",
+ lcolor="darkgreen")
+```
+
+List of top 15 variables from scaled
+```{r}
+RFMscale$importance
+RFMimpscale = RFMscale$importance[,"MeanDecreaseAccuracy"]
+RFMimpscale = as.matrix(RFMimpscale)
+RFMimpscale=RFMimpscale[order(RFMimpscale[,1]),,drop=FALSE]
+RFMimpscale
+
+#there is some discrepancy with the plot versus the column recording MeanDecrease Accuracy. 
+
+#We will follow the values in the plot
+rfmlist15scale = c("HE4", "CA125", "Age", "LYM..1", "LYM.", "Menopause", "AST", "NEU", "PDW", "ALP", "MPV", "CEA", "Mg", "GLO", "ALT")
+```
+Testing Performance on Scaled Set
+```{r}
+set.seed(789)
+RFMtrainscale = randomForest(scaletrain2$TYPE~., data=scaletrain2)
+ovpredscale = predict(RFMtrainscale, scaletest2)
+
+#confusion matrix
+table(ovpredscale, scaletest2$TYPE) #11/66=16.7%
+```
+
+Using PCA to assess biomarkers
+```{r}
+
+#only numeric data permitted, so numov will be used
+
+#now in order to prepare the data, we scale it
+pr.out <- prcomp(numov, scale=TRUE)
+pr.out
+
+pr.out$rotation #explains first 21 points
+pr.out$rotation[22:40,] #explains the next 19 points
+pr.out$rotation[41:47,] #explains the last 8 points
+firstpr= abs(pr.out$rotation[,1])
+firstpr#only the first prinicpal component
+pr.out$rotation[,1] #just looking
+
+firstm= as.matrix(firstpr)
+firstm
+prlist1=firstm[order(firstm[,1]),,drop=FALSE]
+prlist1 = data.frame(prlist1)
+prlist1
+#top 15 are LYM..1, ALB, NEU, PLT, HE4, LYM., PCT, HGB, TP,HCT, Age, CA125, IBIL, TBIL, MONO.
+pca1plot = prcomp(numov[,c("LYM..1","ALB","NEU", "PLT", "HE4", "LYM.", "PCT", "HGB","TP", "HCT", "Age","CA125", "IBIL", "TBIL", "MONO.")], scale = TRUE) 
+
+#will also look at the second PCA 
+secondpr= abs(pr.out$rotation[,2]) #second prinicpal component
+secondm= as.matrix(secondpr)
+secondm
+prlist2=secondm[order(secondm[,1]),,drop=FALSE]
+prlist2 = data.frame(prlist2)
+prlist2
+```
+
+Logistic Regression Control
+```{r}
+#before performing logistic regression with the variables selected, we should view the results and performance when all variables are used, to compare the accuracy of a model with reduced number of variables to a model using all variables
+control.fits=glm(logdata$TYPE~.,
+data=logdata ,family =binomial(link="logit")) #plot
+summary(control.fits) #no significant p values, almost all 0.999 or 1 TBIL is NA?
+
+#lets see the confusion matrix
+control.fitstrain=glm(logtrain$TYPE~.,
+data=logtrain ,family =binomial(link="logit"))
+predictcontrain = predict(control.fitstrain, logtest, type="response") > 0.5
+predict.factorcontrain <- factor(predictcontrain,levels=c(FALSE,TRUE),labels=c("OC","BOT"))
+logtest.factor = factor(logtest$TYPE,levels=c(0,1), labels=c("OC",
+                                                             "BOT")) #will be used for all test data factoring
+table(predict.factorcontrain, logtest.factor) #misclassification rate is 13/66
+```
+
+
+Performing Logistic Regression on Different Levels (Random Forest Variables unscaled)
+```{r}
+#Now we can perform logistic regression and consider its performance based on the variables concluded
+
+#First we will change back the variables OC and BOT to 0 and 1 since it is necessary for plotting using the logdata data frame
+
+rfmlist15
+glm.fits15=glm(logdata$TYPE~HE4+CA125+Age+LYM.+NEU+Menopause+LYM..1+AST+PDW+ALP+Mg+CEA+CO2CP+MPV+GLO,
+data=logdata ,family =binomial(link="logit")) #plot
+summary(glm.fits15) #HE4 has three stars, AST has 1
+
+glm.fits10=glm(logdata$TYPE~HE4+CA125+Age+LYM.+NEU+Menopause+LYM..1+AST+PDW+ALP,
+data=logdata ,family =binomial(link="logit")) #plot
+summary(glm.fits10) #he4 has two stars, AST has 1
+
+glm.fits5=glm(logdata$TYPE~HE4+CA125+Age+LYM.+NEU,
+data=logdata ,family =binomial(link="logit")) #plot
+summary(glm.fits5) #now its HE4 with three stars and intercept with 1
+
+```
+Testing RF Logistic Regression using training and test data
+```{r}
+#for 15 variables
+glm.fits15train=glm(logtrain$TYPE~HE4+CA125+Age+LYM.+NEU+Menopause+LYM..1+AST+PDW+ALP+Mg+CEA+CO2CP+MPV+GLO,
+data=logtrain ,family =binomial(link="logit"))
+predict15train = predict(glm.fits15train, logtest, type="response") > 0.5
+predict.factor15train <- factor(predict15train,levels=c(FALSE,TRUE),labels=c("OC","BOT"))
+logtest.factor = factor(logtest$TYPE,levels=c(0,1), labels=c("OC",
+                                                             "BOT")) #only need this once
+table(predict.factor15train, logtest.factor) #11/66
+
+#for 10 variables
+glm.fits10train=glm(logtrain$TYPE~HE4+CA125+Age+LYM.+NEU+Menopause+LYM..1+AST+PDW+ALP,
+data=logtrain ,family =binomial(link="logit"))
+predict10train = predict(glm.fits10train, logtest, type="response") > 0.5
+predict.factor10train <- factor(predict10train,levels=c(FALSE,TRUE),labels=c("OC","BOT"))
+
+table(predict.factor10train, logtest.factor) #12/66
+
+#for 5 variables
+glm.fits5train=glm(logtrain$TYPE~HE4+CA125+Age+LYM.+NEU,
+data=logtrain ,family =binomial(link="logit"))
+predict5train = predict(glm.fits5train, logtest, type="response") > 0.5
+predict.factor5train <- factor(predict5train,levels=c(FALSE,TRUE),labels=c("OC","BOT"))
+
+table(predict.factor5train, logtest.factor) #12/66
+
+```
+How about scaled logistic regression using random forest?
+```{r}
+rfmlist15scale #looking at the list
+#HE4, CA125, Age, LYM..1, LYM., Menopause, AST,NEU, PDW, ALP, MPV, CEA, Mg, GLO, ALT
+scale.fits15=glm(scaleov$TYPE~HE4+ CA125+ Age+ LYM..1+ LYM.+ Menopause+ AST+NEU+ PDW+ ALP+ MPV+ CEA+ Mg+ GLO+ ALT,
+data=scaleov ,family =binomial(link="logit")) #plot
+summary(scale.fits15) #Three stars intercept and 2* HE4, one star AST
+
+#top 10
+scale.fits10=glm(scaleov$TYPE~HE4+ CA125+ Age+ LYM..1+ LYM.+ Menopause+ AST+NEU+ PDW+ ALP,
+data=scaleov ,family =binomial(link="logit")) #plot
+summary(scale.fits10) #Three stars intercept, HE4 two stars, AST one star
+
+#top 5
+scale.fits5=glm(scaleov$TYPE~HE4+ CA125+ Age+ LYM..1+ LYM.,
+data=scaleov ,family =binomial(link="logit")) #plot
+summary(scale.fits5) #intercept three stars #HE4 three stars
+
+#thing to note: why did HE4 have two stars while 5 and 15 had 3?
+
+```
+Testing the scaled Logistic Regression Models
+```{r}
+#for 15
+scale.fits15train=glm(scaletrain$TYPE~HE4+ CA125+ Age+ LYM..1+ LYM.+ Menopause+ AST+NEU+ PDW+ ALP+ MPV+ CEA+ Mg+ GLO+ ALT,
+data=scaletrain ,family =binomial(link="logit"))
+predict15trainsc = predict(scale.fits15train, scaletest, type="response") > 0.5
+predict.factor15trainsc <- factor(predict15trainsc,levels=c(FALSE,TRUE),labels=c("OC","BOT"))
+sctest.factor = factor(scaletest$TYPE,levels=c(0,1), labels=c("OC",
+                                                             "BOT")) #only need this once
+table(predict.factor15trainsc, sctest.factor) #12/66 
+
+#for 10
+scale.fits10train=glm(scaletrain$TYPE~HE4+ CA125+ Age+ LYM..1+ LYM.+ Menopause+ AST+NEU+ PDW+ ALP,
+data=scaletrain ,family =binomial(link="logit"))
+predict10trainsc = predict(scale.fits10train, scaletest, type="response") > 0.5
+predict.factor10trainsc <- factor(predict10trainsc,levels=c(FALSE,TRUE),labels=c("OC","BOT"))
+ 
+table(predict.factor10trainsc, sctest.factor) #12/66
+
+#for 5
+scale.fits5train=glm(scaletrain$TYPE~HE4+ CA125+ Age+ LYM..1+ LYM.,
+data=scaletrain ,family =binomial(link="logit"))
+predict5trainsc = predict(scale.fits5train, scaletest, type="response") > 0.5
+predict.factor5trainsc <- factor(predict5trainsc,levels=c(FALSE,TRUE),labels=c("OC","BOT"))
+ 
+table(predict.factor5trainsc, sctest.factor) #12/66
+
+#conclusions: one is not better than the other necessarily. All is 12 for unscaled
+
+```
+
+Logistic Regression on Variables Derived from PCA
+```{r}
+prlist1
+#top 15 = LYM..1, ALB, NEU, PLT, HE4, LYM, PCT, HGB, TP, HCT, Age, CA125, IBIL, TBIL, MONO.
+glm.pca15=glm(logdata$TYPE~LYM..1+ALB+NEU+PLT+HE4+LYM.+PCT+HGB+TP+HCT+Age+CA125+IBIL+TBIL+MONO.,
+data=logdata ,family =binomial(link="logit")) #plot
+summary(glm.pca15) #HE4**, HGB*, HCT*, Age.
+
+#top 10
+glm.pca10=glm(logdata$TYPE~LYM..1+ALB+NEU+PLT+HE4+LYM.+PCT+HGB+TP+HCT,
+data=logdata ,family =binomial(link="logit")) #plot
+summary(glm.pca10) #HE4***, HGB#, HCT.
+#top 5
+glm.pca5=glm(logdata$TYPE~LYM..1+ALB+NEU+PLT+HE4,
+data=logdata ,family =binomial(link="logit")) #Plot
+summary(glm.pca5) #HE4***
+
+
+```
+
+Testing model performances with pca
+```{r}
+#for 15 variables
+
+pca.fits15train=glm(logtrain$TYPE~LYM..1+ALB+NEU+PLT+HE4+LYM.+PCT+HGB+TP+HCT+Age+CA125+IBIL+TBIL+MONO.,
+data=logtrain ,family =binomial(link="logit"))
+predict15trainpca = predict(pca.fits15train, logtest, type="response") > 0.5
+predictpca.factor15train <- factor(predict15trainpca,levels=c(FALSE,TRUE),labels=c("OC","BOT"))
+
+table(predictpca.factor15train, logtest.factor) #13/66
+
+#for 10 variables
+pca.fits10train=glm(logtrain$TYPE~LYM..1+ALB+NEU+PLT+HE4+LYM.+PCT+HGB+TP+HCT,
+data=logtrain ,family =binomial(link="logit"))
+predict10trainpca = predict(pca.fits10train, logtest, type="response") > 0.5
+predictpca.factor10train <- factor(predict10trainpca,levels=c(FALSE,TRUE),labels=c("OC","BOT"))
+
+table(predictpca.factor10train, logtest.factor) #11/66
+
+#for 5 variables
+pca.fits5train=glm(logtrain$TYPE~LYM..1+ALB+NEU+PLT+HE4,
+data=logtrain ,family =binomial(link="logit"))
+predict5trainpca = predict(pca.fits5train, logtest, type="response") > 0.5
+predictpca.factor5train <- factor(predict5trainpca,levels=c(FALSE,TRUE),labels=c("OC","BOT"))
+
+table(predictpca.factor5train, logtest.factor) #14/66
+```
+
+Testing the Random Forest Unscaled model even more
+```{r}
+#HE4 and CA125 
+glm.fits2train=glm(logtrain$TYPE~HE4+CA125,
+data=logtrain ,family =binomial(link="logit"))
+predict2train = predict(glm.fits2train, logtest, type="response") > 0.5
+predict.factor1train <- factor(predict2train,levels=c(FALSE,TRUE),labels=c("OC","BOT"))
+
+table(predict.factor1train, logtest.factor) #14/66
+
+#this is the model for visualization:
+glm.fits2=glm(logdata$TYPE~HE4+CA125,
+data=logdata ,family =binomial(link="logit"))
+summary(glm.fits2)
+
+#Just HE4 since its significant in both PCA and random forest
+glm.fits1train=glm(logtrain$TYPE~HE4,
+data=logtrain ,family =binomial(link="logit"))
+predict1train = predict(glm.fits1train, logtest, type="response") > 0.5
+predict.factor1train <- factor(predict1train,levels=c(FALSE,TRUE),labels=c("OC","BOT"))
+
+table(predict.factor1train, logtest.factor) #13/66 misclassification rate
+
+#this is surprising considering the literature on CA125.
+
+#model for visualization
+glm.fits1=glm(logdata$TYPE~HE4,
+data=logdata ,family =binomial(link="logit"))
+summary(glm.fits1)
+
+#what about CA125 all alone?
+glm.fits1CAtrain=glm(logtrain$TYPE~CA125,
+data=logtrain ,family =binomial(link="logit"))
+predict1CAtrain = predict(glm.fits1CAtrain, logtest, type="response") > 0.5
+predict.factor1CAtrain <- factor(predict1CAtrain,levels=c(FALSE,TRUE),labels=c("OC","BOT"))
+
+table(predict.factor1CAtrain, logtest.factor) #19/66, very surprising
+
+#model for visualization
+glm.fits1CA=glm(logdata$TYPE~CA125,
+data=logdata ,family =binomial(link="logit"))
+summary(glm.fits1CA)
+
+#well what about HE4 and AST from the 15 random forest?
+glm.fits2HAtrain=glm(logtrain$TYPE~HE4+AST,
+data=logtrain ,family =binomial(link="logit"))
+predict2HAtrain = predict(glm.fits2HAtrain, logtest, type="response") > 0.5
+predict.factor2HAtrain <- factor(predict2HAtrain,levels=c(FALSE,TRUE),labels=c("OC","BOT"))
+
+table(predict.factor2HAtrain, logtest.factor) #11/66
+
+#this is the model for visualization:
+glm.fits2HA=glm(logdata$TYPE~HE4+AST,
+data=logdata ,family =binomial(link="logit"))
+summary(glm.fits2HA)
+```
+VISUALIZATION: PART 1, General Exploratory Analysis (UNSCALED, using ovdata)
+
+```{r}
+#the bargraph showing cancer type and menopause
+ggplot(ovdata, aes(x = TYPE, fill = Menopause)) + 
+  geom_bar() + 
+  labs(x = "Cancer Type", y = "Count", title = "Ovarian Cancer by Menopausal Status") 
+
+#Age and cancer
+ggplot(ovdata, aes(x = Age, color = TYPE)) + 
+  geom_density(alpha = 0.5) +labs(title = "Ovarian Cancer by Age")
+#whats the mean age?
+print(mean(ovdata$Age))
+#min?
+print(min(ovdata$Age))
+#max?
+print(max(ovdata$Age))
+#median?
+print(median(ovdata$Age))
+
+
+#CA125 and Age
+ggplot(ovdata, aes(x = Age, y = CA125, color = TYPE)) + 
+  geom_point() + 
+  scale_color_manual(values = c("gray", "red")) + labs(title = "Ovarian Cancer Types by Age and CA125")
+
+```
+
+VISUALIZATION: PART 2
+```{r}
+library(GGally)
+library(ggbiplot)
+#correlation graphs, heatmap, etc.
+#unscaled random forest top 15 correlation, using logdata since ovdata TYPE and Menopause are cat
+
+cor_rf <- cor(logdata[, c("HE4","CA125","Age","LYM.","NEU","Menopause","LYM..1","AST","PDW","ALP","Mg","CEA","CO2CP","MPV","GLO")]) 
+ 
+ggcorr(cor_rf, label = TRUE, label_round = 2, label_size = 3, 
+       hjust = 0.5, vjust = 0.5,  
+       geom = "tile", color = "blue",  
+       name = "Correlation Matrix") + 
+  ggtitle("Random Forest") + 
+  theme(plot.title = element_text(size = 14)) 
+  
+#observations to note: NEU and LYM..1 have -1 correlation
+#LYM. and LYM..1 have 0.94
+#LYM and NEU -0.93
+#correlations start to drop off at 11 variables: CEA, CO2CP,MPV, and GLO
+
+#scaled random forest top 15 correlation, 
+cor_rfscale <- cor(logdata[, c("HE4", "CA125", "Age", "LYM..1", "LYM.", "Menopause", "AST","NEU", "PDW", "ALP", "MPV", "CEA", "Mg", "GLO", "ALT")]) 
+ggcorr(cor_rfscale, label = TRUE, label_round = 2, label_size = 3, 
+       hjust = 0.5, vjust = 0.5,  
+       geom = "tile", color = "blue",  
+       name = "Correlation Matrix") + 
+  ggtitle("Random Forest Variables with Scaled Data") + 
+  theme(plot.title = element_text(size = 14)) 
+#the exact same correlations, not surprising. But the strength in correlations drop offafter ten variables, Mg seems to be in between two weak columns and seems stronger
+
+#pca 1 correlation
+cor_pca <- cor(numov[, c("LYM..1", "ALB", "NEU", "PLT", "HE4" ,"LYM.", "PCT", "HGB", "TP", "HCT", "Age", "CA125", "IBIL", "TBIL", "MONO.")]) 
+ggcorr(cor_pca, label = TRUE, label_round = 2, label_size = 3,
+       hjust = 0.5, vjust = 0.5,  
+       geom = "tile", color = "blue",  
+       name = "Correlation Matrix") + 
+  ggtitle("PCA Variables Correlation") + 
+  theme(plot.title = element_text(size = 14)) 
+#correlations are very strong
+#IBIL and TBIL are 1 to 1
+#HGB and HCT are 0.99 
+
+
+
+#unscaled random forest top 5 pairplots
+rftop5 = logdata[, c("HE4","CA125","Age","LYM.","NEU")]
+pairs(rftop5, 
+labels = c("HE4","CA125","Age","LYM.","NEU"), 
+gap = 0.3, 
+main = "Pairsplot of Random Forest Top 5 Variables")
+
+#scaled random forest top 5 pairplots
+#excluded the
+rfscaletop5 = scaleov[,c("HE4", "CA125", "Age", "LYM..1", "LYM.")]
+pairs(rfscaletop5, 
+labels = c("HE4", "CA125", "Age", "LYM..1", "LYM."), 
+gap = 0.3, 
+main = "Pairsplot of Random Forest Top 5 Scaled Variables")
+
+#pca 1 top 5 pairplots
+pcatop5 = numov[, c("LYM..1", "ALB", "NEU", "PLT", "HE4")]
+pairs(pcatop5, 
+labels = c("LYM..1", "ALB", "NEU", "PLT", "HE4"), 
+gap = 0.3, 
+main = "Pairsplot of PCA1") 
+
+
+```
+
+
+VISUALIZATION: PART 3, PCA Plots
+```{r}
+#the plots with the arrows
+library(ggbiplot)
+ggbiplot(pr.out, obs.scale = 1, var.scale = 1, groups = ovdata$TYPE) #all
+ggbiplot(pca1plot, obs.scale = 1, var.scale = 1, groups = ovdata$TYPE) #top 15
+
+```
+Scree plot
+```{r}
+pve = 100 * pr.out$sdev^2 / sum(pr.out$sdev^2) 
+par(mfrow = c(1, 2)) 
+plot(pve, type = "o", ylab = "PVE", xlab = "PCA", col = "blue") 
+plot(cumsum(pve), type = "o", ylab = "Cumulative PVE", xlab = "Principal Component", col = "red") 
+#there is an elbow after the tenth principal component
+#Half the variance can be explained by the first four principal components
+```
+
+
+VISUALIZATION: PART 4, Logistic Regression Plots
+
+The Control LogReg
+```{r}
+#CREDIT FOR CODE:https://github.com/StatQuest/logistic_regression_demo/blob/master/logistic_regression_demo.R
+
+predicted.data <- data.frame(
+  probability.of.oc=control.fits$fitted.values,
+  TYPE=ovdata$TYPE)
+predicted.data <- predicted.data[
+  order(predicted.data$probability.of.oc, decreasing=TRUE),]
+predicted.data$rank <- 1:nrow(predicted.data)
+
+ggplot(data=predicted.data, aes(x=rank, y=probability.of.oc)) +
+  geom_point(aes(color=TYPE), alpha=1, shape=4, stroke=2) +
+  xlab("Index") +
+  ylab("Predicted probability of not getting ovarian cancer")
+ 
+```
+
+
+Random Forest UnScaled LogReg
+15 variables
+```{r}
+#use glm.fits15
+predicted.data <- data.frame(
+  probability.of.oc=glm.fits15$fitted.values,
+  TYPE=ovdata$TYPE)
+predicted.data <- predicted.data[
+  order(predicted.data$probability.of.oc, decreasing=TRUE),]
+predicted.data$rank <- 1:nrow(predicted.data)
+
+## Lastly, we can plot the predicted probabilities for each sample having
+## heart disease and color by whether or not they actually had heart disease
+ggplot(data=predicted.data, aes(x=rank, y=probability.of.oc)) +
+  geom_point(aes(color=TYPE), alpha=1, shape=4, stroke=2) +
+  xlab("Index") +
+  ylab("Predicted probability of not getting ovarian cancer")
+```
+10 variables
+```{r}
+#use glm.fits10
+predicted.data <- data.frame(
+  probability.of.oc=glm.fits10$fitted.values,
+  TYPE=ovdata$TYPE)
+predicted.data <- predicted.data[
+  order(predicted.data$probability.of.oc, decreasing=TRUE),]
+predicted.data$rank <- 1:nrow(predicted.data)
+
+ggplot(data=predicted.data, aes(x=rank, y=probability.of.oc)) +
+  geom_point(aes(color=TYPE), alpha=1, shape=4, stroke=2) +
+  xlab("Index") +
+  ylab("Predicted probability of not getting ovarian cancer")
+```
+
+5 variables
+```{r}
+#use glm.fits5
+predicted.data <- data.frame(
+  probability.of.oc=glm.fits5$fitted.values,
+  TYPE=ovdata$TYPE)
+predicted.data <- predicted.data[
+  order(predicted.data$probability.of.oc, decreasing=TRUE),]
+predicted.data$rank <- 1:nrow(predicted.data)
+
+
+ggplot(data=predicted.data, aes(x=rank, y=probability.of.oc)) +
+  geom_point(aes(color=TYPE), alpha=1, shape=4, stroke=2) +
+  xlab("index") +
+  ylab("Predicted probability of not getting ovarian cancer")
+```
+
+Random Forest Scaled LogReg
+15 variables
+```{r}
+#use scale.fits15
+#creating a factor for scaleov dataframe
+scov.factor = factor(scaleov$TYPE,levels=c(0,1), labels=c("OC",
+                                                             "BOT"))
+predicted.data <- data.frame(
+  probability.of.oc=scale.fits15$fitted.values,
+  TYPE=scov.factor)
+predicted.data <- predicted.data[
+  order(predicted.data$probability.of.oc, decreasing=TRUE),]
+predicted.data$rank <- 1:nrow(predicted.data)
+
+
+ggplot(data=predicted.data, aes(x=rank, y=probability.of.oc)) +
+  geom_point(aes(color=TYPE), alpha=1, shape=4, stroke=2) +
+  xlab("Index") +
+  ylab("Predicted probability of not getting ovarian cancer")
+
+```
+
+10 variables
+```{r}
+#use scale.fits10
+predicted.data <- data.frame(
+  probability.of.oc=scale.fits10$fitted.values,
+  TYPE=scov.factor)
+predicted.data <- predicted.data[
+  order(predicted.data$probability.of.oc, decreasing=TRUE),]
+predicted.data$rank <- 1:nrow(predicted.data)
+
+
+ggplot(data=predicted.data, aes(x=rank, y=probability.of.oc)) +
+  geom_point(aes(color=TYPE), alpha=1, shape=4, stroke=2) +
+  xlab("Index") +
+  ylab("Predicted probability of not getting ovarian cancer")
+
+```
+
+5 variables
+```{r}
+#use scale.fits5
+predicted.data <- data.frame(
+  probability.of.oc=scale.fits5$fitted.values,
+  TYPE=scov.factor)
+predicted.data <- predicted.data[
+  order(predicted.data$probability.of.oc, decreasing=TRUE),]
+predicted.data$rank <- 1:nrow(predicted.data)
+
+
+ggplot(data=predicted.data, aes(x=rank, y=probability.of.oc)) +
+  geom_point(aes(color=TYPE), alpha=1, shape=4, stroke=2) +
+  xlab("Index") +
+  ylab("Predicted probability of not getting ovarian cancer")
+
+```
+
+PCA Plots LogReg
+15 variables
+```{r}
+#use glm.pca15
+predicted.data <- data.frame(
+  probability.of.oc=glm.pca15$fitted.values,
+  TYPE=scov.factor)
+predicted.data <- predicted.data[
+  order(predicted.data$probability.of.oc, decreasing=TRUE),]
+predicted.data$rank <- 1:nrow(predicted.data)
+
+
+ggplot(data=predicted.data, aes(x=rank, y=probability.of.oc)) +
+  geom_point(aes(color=TYPE), alpha=1, shape=4, stroke=2) +
+  xlab("Index") +
+  ylab("Predicted probability of not getting ovarian cancer")
+
+```
+10 variables
+```{r}
+#use glm.pca10
+predicted.data <- data.frame(
+  probability.of.oc=glm.pca10$fitted.values,
+  TYPE=scov.factor)
+predicted.data <- predicted.data[
+  order(predicted.data$probability.of.oc, decreasing=TRUE),]
+predicted.data$rank <- 1:nrow(predicted.data)
+
+
+ggplot(data=predicted.data, aes(x=rank, y=probability.of.oc)) +
+  geom_point(aes(color=TYPE), alpha=1, shape=4, stroke=2) +
+  xlab("Index") +
+  ylab("Predicted probability of not getting ovarian cancer")
+
+```
+5 variables
+```{r}
+#use glm.pca5
+predicted.data <- data.frame(
+  probability.of.oc=glm.pca5$fitted.values,
+  TYPE=scov.factor)
+predicted.data <- predicted.data[
+  order(predicted.data$probability.of.oc, decreasing=TRUE),]
+predicted.data$rank <- 1:nrow(predicted.data)
+
+
+ggplot(data=predicted.data, aes(x=rank, y=probability.of.oc)) +
+  geom_point(aes(color=TYPE), alpha=1, shape=4, stroke=2) +
+  xlab("Index") +
+  ylab("Predicted probability of not getting ovarian cancer")
+
+```
+
+
+Random Forest HE4+CA125 VariablesLogReg
+```{r}
+#use glm.fits2
+predicted.data <- data.frame(
+  probability.of.oc=glm.fits2$fitted.values,
+  TYPE=ovdata$TYPE)
+predicted.data <- predicted.data[
+  order(predicted.data$probability.of.oc, decreasing=TRUE),]
+predicted.data$rank <- 1:nrow(predicted.data)
+
+
+ggplot(data=predicted.data, aes(x=rank, y=probability.of.oc)) +
+  geom_point(aes(color=TYPE), alpha=1, shape=4, stroke=2) +
+  xlab("Index") +
+  ylab("Predicted probability of not getting ovarian cancer")
+
+#use glm.fits2HA
+predicted.data <- data.frame(
+  probability.of.oc=glm.fits2HA$fitted.values,
+  TYPE=ovdata$TYPE)
+predicted.data <- predicted.data[
+  order(predicted.data$probability.of.oc, decreasing=TRUE),]
+predicted.data$rank <- 1:nrow(predicted.data)
+
+
+ggplot(data=predicted.data, aes(x=rank, y=probability.of.oc)) +
+  geom_point(aes(color=TYPE), alpha=1, shape=4, stroke=2) +
+  xlab("Index") +
+  ylab("Predicted probability of not getting ovarian cancer")
+
+```
+
+Random Forest 1 Variable (HE4) LogReg
+```{r}
+#use glm.fits1
+predicted.data <- data.frame(
+  probability.of.oc=glm.fits1$fitted.values,
+  TYPE=ovdata$TYPE)
+predicted.data <- predicted.data[
+  order(predicted.data$probability.of.oc, decreasing=TRUE),]
+predicted.data$rank <- 1:nrow(predicted.data)
+
+
+ggplot(data=predicted.data, aes(x=rank, y=probability.of.oc)) +
+  geom_point(aes(color=TYPE), alpha=1, shape=4, stroke=2) +
+  xlab("Index") +
+  ylab("Predicted probability of not getting ovarian cancer")
+
+```
+LogReg with CA125
+```{r}
+#use glm.fits1CA
+predicted.data <- data.frame(
+  probability.of.oc=glm.fits1CA$fitted.values,
+  TYPE=ovdata$TYPE)
+predicted.data <- predicted.data[
+  order(predicted.data$probability.of.oc, decreasing=TRUE),]
+predicted.data$rank <- 1:nrow(predicted.data)
+
+
+ggplot(data=predicted.data, aes(x=rank, y=probability.of.oc)) +
+  geom_point(aes(color=TYPE), alpha=1, shape=4, stroke=2) +
+  xlab("Index") +
+  ylab("Predicted probability of not getting ovarian cancer")
+```
+
+
+
+VISUALIZATION: PART 5, Post Analysis Visualization
+```{r}
+library(pROC)
+#ROC Curves
+#PCA
+roc_glm.pca_15 <- roc(logdata$TYPE, predict(glm.pca15, logdata, type = "response"))
+roc_glm.pca_10 <- roc(logdata$TYPE, predict(glm.pca10, logdata, type = "response"))
+roc_glm.pca_5 <- roc(logdata$TYPE, predict(glm.pca5, logdata, type = "response"))
+
+plot(roc_glm.pca_15, col = "blue", main = "PCA ROC Curves")
+lines(roc_glm.pca_10, col = "green")
+lines(roc_glm.pca_5, col = "red")
+
+legend("bottomright", legend = c("glm.pca15", "glm.pca10", "glm.pca5"),
+       col = c("blue", "green", "red"), lwd = 1)
+       
+#Random Forest
+roc_us_lr_15 <- roc(logdata$TYPE, predict(glm.fits15, logdata, type = "response"))
+roc_us_lr_10 <- roc(logdata$TYPE, predict(glm.fits10, logdata, type = "response"))
+roc_us_lr_5 <- roc(logdata$TYPE, predict(glm.fits5, logdata, type = "response"))
+roc_glm.fits1 <- roc(logdata$TYPE, predict(glm.fits1, logdata, type = "response"))
+roc_glm.fits2 <- roc(logdata$TYPE, predict(glm.fits2, logdata, type = "response"))
+
+plot(roc_us_lr_15, col = "blue", main = "unscaled ROC Curves")
+lines(roc_us_lr_10, col = "green")
+lines(roc_us_lr_5, col = "red")
+lines(roc_glm.fits1, col = "purple")
+lines(roc_glm.fits2, col = "orange")
+
+legend("bottomright", legend = c("glm.fits15", "glm.fits10", "glm.fits5", "glm.fits1", "glm.fits2"),
+       col = c("blue", "green", "red", "purple", "orange"), lwd = 1)
+       
+#here is AUC
+auc_us_lr_15 <- auc(roc_us_lr_15)> auc_us_lr_10 <- auc(roc_us_lr_10)> auc_us_lr_5 <- auc(roc_us_lr_5)> auc_glm_fits1 <- auc(roc_glm.fits1)> auc_glm_fits2 <- auc(roc_glm.fits2)
+
+auc_roc_glm.pca_15 <- auc(roc_glm.pca_15)> auc_roc_glm.pca_10 <- auc(roc_roc_glm.pca_10)
+```
+
+
+```{r}
+#Anything with HE4, and any other variables deemed significant from the logistic regression
+
+#how does the data on TYPE look with HE4
+  ggplot(ovdata, aes(x = Age, y = HE4, color = TYPE)) + 
+  geom_point() + 
+  scale_color_manual(values = c("gray", "red")) + labs(title = "Ovarian Cancer Types by Age and HE4")
+
+
+```
+
