@@ -7,6 +7,7 @@ Importing Data
 
 ```{r}
 #Download the dataset from https://www.kaggle.com/datasets/saurabhshahane/predict-ovarian-cancer/data
+#Youtube tutorial for logistic regression plot: https://www.youtube.com/watch?v=yIYKR4sgzI8&ab_channel=StatQuestwithJoshStarmer
 
 library(readxl)
 ovdata <- read_excel("Supplementary data 1.xlsx")
